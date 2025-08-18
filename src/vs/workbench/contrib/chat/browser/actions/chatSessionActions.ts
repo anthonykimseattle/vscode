@@ -31,6 +31,44 @@ export interface IChatSessionContext {
 	widget?: any;
 }
 
+interface IMarshalledChatSessionContext {
+	session: IChatSessionItem;
+	$mid: number; // MarshalledId.ChatSessionContext
+}
+
+// Type guard to check if context is marshalled
+function isMarshalledContext(context: any): context is IMarshalledChatSessionContext {
+	return context && typeof context === 'object' && '$mid' in context && 'session' in context;
+}
+
+// Helper function to extract session information from either context format
+function extractSessionInfo(context: any): { sessionId: string; sessionType: 'editor' | 'widget'; editorInput?: any; editorGroup?: any; widget?: any } | null {
+	if (isMarshalledContext(context)) {
+		const session = context.session as any;
+		if ('sessionType' in session) {
+			return {
+				sessionId: session.sessionType === 'editor' && session.editor?.sessionId 
+					? session.editor.sessionId
+					: session.widget?.viewModel?.model.sessionId,
+				sessionType: session.sessionType,
+				editorInput: session.editor,
+				editorGroup: session.group,
+				widget: session.widget
+			};
+		}
+	} else if (context && typeof context === 'object' && 'sessionId' in context) {
+		// Legacy IChatSessionContext format
+		return {
+			sessionId: context.sessionId,
+			sessionType: context.sessionType,
+			editorInput: context.editorInput,
+			editorGroup: context.editorGroup,
+			widget: context.widget
+		};
+	}
+	return null;
+}
+
 export class RenameChatSessionAction extends Action2 {
 	static readonly id = 'workbench.action.chat.renameSession';
 
@@ -105,42 +143,33 @@ export class MoveChatSessionToNewEditorAction extends Action2 {
 		});
 	}
 
-	async run(accessor: ServicesAccessor, context?: IChatSessionContext): Promise<void> {
-		if (!context) {
+	async run(accessor: ServicesAccessor, context?: any): Promise<void> {
+		const sessionInfo = extractSessionInfo(context);
+		if (!sessionInfo) {
 			return;
 		}
 
 		const editorService = accessor.get(IEditorService);
-		const editorGroupService = accessor.get(IEditorGroupsService);
-		const widgetService = accessor.get(IChatWidgetService);
-		const viewsService = accessor.get(IViewsService);
 
-		if (context.sessionType === 'editor' && context.editorInput && context.editorGroup) {
-			// For editor sessions, get the view state and close the original
-			const viewState = context.editorInput.viewState;
-			await editorService.closeEditor({ editor: context.editorInput, groupId: context.editorGroup.id });
-			
-			// Open in new editor to the side
-			const options: IChatEditorOptions = { 
-				target: { sessionId: context.sessionId }, 
-				pinned: true, 
-				viewState
-			};
-			await editorService.openEditor({ resource: ChatEditorInput.getNewEditorUri(), options }, ACTIVE_GROUP);
-		} else if (context.sessionType === 'widget' && context.widget) {
-			// For widget sessions, get the view state and clear the widget
-			const viewState = context.widget.getViewState();
-			context.widget.clear();
-			await context.widget.waitForReady();
-			
-			// Open in new editor to the side
-			const options: IChatEditorOptions = { 
-				target: { sessionId: context.sessionId }, 
-				pinned: true, 
-				viewState
-			};
-			await editorService.openEditor({ resource: ChatEditorInput.getNewEditorUri(), options }, ACTIVE_GROUP);
+		if (sessionInfo.sessionType === 'editor' && sessionInfo.editorInput && sessionInfo.editorGroup) {
+			// For editor sessions, close the original
+			const chatEditor = sessionInfo.editorInput;
+			if (chatEditor instanceof ChatEditorInput) {
+				await editorService.closeEditor({ editor: chatEditor, groupId: sessionInfo.editorGroup.id });
+			}
+		} else if (sessionInfo.sessionType === 'widget' && sessionInfo.widget) {
+			// For widget sessions, clear the widget
+			const widget = sessionInfo.widget;
+			widget.clear();
+			await widget.waitForReady();
 		}
+
+		// Open in new editor to the side - the target will handle loading the session
+		const options: IChatEditorOptions = { 
+			target: { sessionId: sessionInfo.sessionId }, 
+			pinned: true
+		};
+		await editorService.openEditor({ resource: ChatEditorInput.getNewEditorUri(), options }, ACTIVE_GROUP);
 	}
 }
 
@@ -156,44 +185,34 @@ export class MoveChatSessionToNewWindowAction extends Action2 {
 		});
 	}
 
-	async run(accessor: ServicesAccessor, context?: IChatSessionContext): Promise<void> {
-		if (!context) {
+	async run(accessor: ServicesAccessor, context?: any): Promise<void> {
+		const sessionInfo = extractSessionInfo(context);
+		if (!sessionInfo) {
 			return;
 		}
 
 		const editorService = accessor.get(IEditorService);
-		const editorGroupService = accessor.get(IEditorGroupsService);
-		const widgetService = accessor.get(IChatWidgetService);
-		const viewsService = accessor.get(IViewsService);
 
-		if (context.sessionType === 'editor' && context.editorInput && context.editorGroup) {
-			// For editor sessions, get the view state and close the original
-			const viewState = context.editorInput.viewState;
-			await editorService.closeEditor({ editor: context.editorInput, groupId: context.editorGroup.id });
-			
-			// Open in new auxiliary window
-			const options: IChatEditorOptions = { 
-				target: { sessionId: context.sessionId }, 
-				pinned: true, 
-				viewState,
-				auxiliary: { compact: true, bounds: { width: 640, height: 640 } }
-			};
-			await editorService.openEditor({ resource: ChatEditorInput.getNewEditorUri(), options }, AUX_WINDOW_GROUP);
-		} else if (context.sessionType === 'widget' && context.widget) {
-			// For widget sessions, get the view state and clear the widget
-			const viewState = context.widget.getViewState();
-			context.widget.clear();
-			await context.widget.waitForReady();
-			
-			// Open in new auxiliary window
-			const options: IChatEditorOptions = { 
-				target: { sessionId: context.sessionId }, 
-				pinned: true, 
-				viewState,
-				auxiliary: { compact: true, bounds: { width: 640, height: 640 } }
-			};
-			await editorService.openEditor({ resource: ChatEditorInput.getNewEditorUri(), options }, AUX_WINDOW_GROUP);
+		if (sessionInfo.sessionType === 'editor' && sessionInfo.editorInput && sessionInfo.editorGroup) {
+			// For editor sessions, close the original
+			const chatEditor = sessionInfo.editorInput;
+			if (chatEditor instanceof ChatEditorInput) {
+				await editorService.closeEditor({ editor: chatEditor, groupId: sessionInfo.editorGroup.id });
+			}
+		} else if (sessionInfo.sessionType === 'widget' && sessionInfo.widget) {
+			// For widget sessions, clear the widget
+			const widget = sessionInfo.widget;
+			widget.clear();
+			await widget.waitForReady();
 		}
+
+		// Open in new auxiliary window - the target will handle loading the session
+		const options: IChatEditorOptions = { 
+			target: { sessionId: sessionInfo.sessionId }, 
+			pinned: true,
+			auxiliary: { compact: true, bounds: { width: 640, height: 640 } }
+		};
+		await editorService.openEditor({ resource: ChatEditorInput.getNewEditorUri(), options }, AUX_WINDOW_GROUP);
 	}
 }
 
@@ -209,25 +228,27 @@ export class MoveChatSessionToSideBarAction extends Action2 {
 		});
 	}
 
-	async run(accessor: ServicesAccessor, context?: IChatSessionContext): Promise<void> {
-		if (!context) {
+	async run(accessor: ServicesAccessor, context?: any): Promise<void> {
+		const sessionInfo = extractSessionInfo(context);
+		if (!sessionInfo) {
 			return;
 		}
 
 		const editorService = accessor.get(IEditorService);
-		const editorGroupService = accessor.get(IEditorGroupsService);
 		const viewsService = accessor.get(IViewsService);
 
-		if (context.sessionType === 'editor' && context.editorInput && context.editorGroup) {
-			// For editor sessions, get the view state and close the original
-			const viewState = context.editorInput.viewState;
-			await editorService.closeEditor({ editor: context.editorInput, groupId: context.editorGroup.id });
-			
-			// Open in side bar and load the session
-			const view = await viewsService.openView(ChatViewId) as ChatViewPane;
-			await view.loadSession(context.sessionId, viewState);
-			view.focus();
-		} else if (context.sessionType === 'widget') {
+		if (sessionInfo.sessionType === 'editor' && sessionInfo.editorInput && sessionInfo.editorGroup) {
+			// For editor sessions, close the original and open in side bar
+			const chatEditor = sessionInfo.editorInput;
+			if (chatEditor instanceof ChatEditorInput) {
+				await editorService.closeEditor({ editor: chatEditor, groupId: sessionInfo.editorGroup.id });
+				
+				// Open in side bar and load the session
+				const view = await viewsService.openView(ChatViewId) as ChatViewPane;
+				await view.loadSession(sessionInfo.sessionId);
+				view.focus();
+			}
+		} else if (sessionInfo.sessionType === 'widget') {
 			// Widget is already in the side bar, so just focus it
 			const view = await viewsService.openView(ChatViewId) as ChatViewPane;
 			view.focus();
